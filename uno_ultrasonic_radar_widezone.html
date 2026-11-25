@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNO Ultrasonic Radar — Wide Zone</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#06110e;color:#7cffb2;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;min-height:100vh;display:grid;place-items:center;padding:18px}
+.panel{width:min(900px,100%);border:1px solid #1c6746;background:linear-gradient(180deg,#071914,#030b08);box-shadow:0 0 30px #00ff5730;border-radius:16px;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #155438;padding-bottom:14px}
+h1{font-size:clamp(18px,4vw,26px);letter-spacing:3px;margin:0;color:#b8ffd5}
+button{background:#0b3925;color:#b8ffd5;border:1px solid #2d995f;border-radius:8px;padding:10px 15px;font:inherit;cursor:pointer}
+button:hover{background:#145d39}
+.status{font-size:12px;color:#7cffb2}
+main{display:grid;grid-template-columns:minmax(0,1fr) 200px;gap:16px;align-items:center;margin-top:18px}
+canvas{width:100%;height:auto;display:block}
+.metrics{border:1px solid #155438;border-radius:10px;padding:16px;background:#071711}
+.label{color:#4eaa7a;font-size:12px;letter-spacing:1px}
+.value{font-size:30px;margin:8px 0 18px;color:#b8ffd5}
+.note{color:#65a887;font-size:12px;line-height:1.6}
+@media(max-width:600px){main{grid-template-columns:1fr}.metrics{display:flex;justify-content:space-between;gap:12px;align-items:center}.value{margin:4px 0;font-size:24px}.note{display:none}}
+</style>
+</head>
+<body>
+<div class="panel">
+<header><h1>ULTRASONIC RADAR</h1><button id="connect">CONNECT ARDUINO</button><span id="status" class="status">DISCONNECTED</span></header>
+<main>
+<canvas id="radar" width="800" height="460"></canvas>
+<div class="metrics"><div><div class="label">DISTANCE</div><div id="distance" class="value">-- cm</div></div><div><div class="label">DETECTION</div><div id="detect" class="value" style="font-size:20px">WAITING</div></div><p class="note">One fixed sensor: shaded cone shows approximate wide-angle coverage. It cannot tell the object's exact left/right direction. Sweep is visual only.</p></div>
+</main>
+</div>
+<script>
+const c=document.getElementById('radar'),ctx=c.getContext('2d');
+const distEl=document.getElementById('distance'),detectEl=document.getElementById('detect'),statusEl=document.getElementById('status');
+let distance=null, sweep=0;
+const cx=400, cy=420, maxR=350;
+const bg=document.createElement('canvas'); bg.width=c.width; bg.height=c.height;
+const b=bg.getContext('2d');
+function point(r,a){return [cx+r*Math.cos(a),cy-r*Math.sin(a)]}
+function drawBackground(){
+ b.clearRect(0,0,bg.width,bg.height);
+ // subtle grid
+ b.strokeStyle='#0b2418';b.lineWidth=1;
+ for(let x=40;x<c.width;x+=40){b.beginPath();b.moveTo(x,30);b.lineTo(x,cy);b.stroke()}
+ for(let y=40;y<cy;y+=40){b.beginPath();b.moveTo(25,y);b.lineTo(775,y);b.stroke()}
+ // semicircle range rings and labels
+ for(let i=1;i<=4;i++){
+  let r=maxR*i/4;
+  b.beginPath();b.arc(cx,cy,r,Math.PI,0);b.strokeStyle='#1d7749';b.lineWidth=1.5;b.stroke();
+  b.fillStyle='#56b782';b.font='13px monospace';b.fillText(`${i*25} cm`,cx+8,cy-r+16);
+ }
+ for(let deg=0;deg<=180;deg+=30){
+  let a=deg*Math.PI/180,p=point(maxR,a);
+  b.beginPath();b.moveTo(cx,cy);b.lineTo(...p);b.strokeStyle='#185b39';b.stroke();
+  b.fillStyle='#6fca98';b.font='14px monospace';let q=point(maxR+22,a);b.fillText(`${deg}°`,q[0]-12,q[1]+5);
+ }
+ b.beginPath();b.moveTo(cx-maxR,cy);b.lineTo(cx+maxR,cy);b.strokeStyle='#2aa461';b.lineWidth=2;b.stroke();
+ b.beginPath();b.arc(cx,cy,4,0,Math.PI*2);b.fillStyle='#aaffcc';b.fill();
+}
+drawBackground();
+function drawFrame(){
+ ctx.clearRect(0,0,c.width,c.height);
+ ctx.drawImage(bg,0,0);
+ // sweep + small trail
+ for(let j=12;j>=0;j--){
+  let aa=(sweep-j*2.5)*Math.PI/180;
+  if(aa<0||aa>Math.PI)continue;
+  let p=point(maxR,aa);
+  ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(...p);
+  ctx.strokeStyle=`rgba(42,255,125,${0.035+(0.12*(1-j/12))})`;ctx.lineWidth=1;ctx.stroke();
+ }
+ let a=sweep*Math.PI/180,p=point(maxR,a);
+ ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(...p);
+ ctx.strokeStyle='#38ff8b';ctx.lineWidth=2;ctx.shadowColor='#32ff87';ctx.shadowBlur=10;ctx.stroke();ctx.shadowBlur=0;
+ // Fixed sensor: show an approximate wide detection zone centered forward.
+ // This is a visualization of the sensor's cone, not measured direction.
+ if(distance!==null && distance>=2 && distance<=100){
+  const beamHalf=28*Math.PI/180; // illustrative ~56-degree display cone
+  const rangeR=maxR*distance/100;
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx,cy,rangeR,Math.PI/2-beamHalf,Math.PI/2+beamHalf);
+  ctx.closePath();
+  ctx.fillStyle='rgba(65,255,140,0.13)';
+  ctx.fill();
+  ctx.strokeStyle='rgba(65,255,140,0.55)';
+  ctx.lineWidth=1.5;
+  ctx.stroke();
+  // Highlight the outer range boundary across the cone
+  let left=point(rangeR,Math.PI/2+beamHalf);
+  let right=point(rangeR,Math.PI/2-beamHalf);
+  ctx.beginPath();ctx.moveTo(...left);ctx.lineTo(...right);
+  ctx.strokeStyle='rgba(65,255,140,0.75)';ctx.lineWidth=2;ctx.stroke();
+ }
+ if(distance!==null && distance>=2 && distance<=100){
+  let r=maxR*distance/100,op=point(r,Math.PI/2);
+  ctx.beginPath();ctx.arc(op[0],op[1],7,0,Math.PI*2);ctx.fillStyle='#ff5353';ctx.shadowColor='#ff3838';ctx.shadowBlur=12;ctx.fill();ctx.shadowBlur=0;
+  ctx.fillStyle='#ffd0d0';ctx.font='bold 15px monospace';ctx.fillText(`${distance} cm`,op[0]+13,op[1]-8);
+ }
+ sweep+=0.9;
+ if(sweep>180)sweep=0;
+ requestAnimationFrame(drawFrame);
+}
+requestAnimationFrame(drawFrame);
+document.getElementById('connect').addEventListener('click',async()=>{
+ if(!('serial' in navigator)){statusEl.textContent='WEB SERIAL NOT SUPPORTED — USE CHROME';return}
+ try{
+  port=await navigator.serial.requestPort();
+  await port.open({baudRate:9600});
+  statusEl.textContent='CONNECTED';
+  const decoder=new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable).catch(()=>{});
+  reader=decoder.readable.getReader();
+  let buffer='';
+  while(true){
+   const {value,done}=await reader.read();
+   if(done)break;
+   buffer+=value;
+   const lines=buffer.split(/\r?\n/);buffer=lines.pop()||'';
+   for(const line of lines){
+    const m=line.match(/(?:DIST(?:ANCE)?\s*[:=]\s*)?(-?\d+)/i);
+    if(m){
+     let d=Number(m[1]);
+     if(d>0&&d<=400){
+      distance=d;distEl.textContent=d+' cm';
+      detectEl.textContent=d<=100?'OBJECT':'OUT OF RANGE';
+      detectEl.style.color=d<=100?'#ff7777':'#b8ffd5';
+     }else{
+      distance=null;distEl.textContent='-- cm';detectEl.textContent='NO ECHO';detectEl.style.color='#7cffb2';
+     }
+    }
+   }
+  }
+ }catch(e){
+  statusEl.textContent='ERROR: '+(e.name||'')+' — '+(e.message||e);
+  console.error(e);
+  alert('Radar connection failed: '+(e.name||'')+' — '+(e.message||e));
+ }
+});
+</script>
+</body>
+</html>
